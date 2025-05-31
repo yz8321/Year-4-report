@@ -1,0 +1,103 @@
+#Generate the ER Network
+import numpy as np
+import matplotlib.pyplot as plt
+import networkx as nx
+
+# Create a random network
+num_nodes = 12
+edge_prob= 0.5
+
+G = nx.erdos_renyi_graph(num_nodes, edge_prob)
+# Draw the network
+plt.figure(figsize=(6, 6))
+nx.draw(G, with_labels=True, node_color='lightblue', edge_color='gray', node_size=700)
+plt.title('Generated Random Network')
+plt.show()
+
+
+
+
+#Calculate the stabilization time
+
+#Get Adjacent Matrix
+A = nx.adjacency_matrix(G).toarray()
+
+# Compute the degree matrix
+D = np.diag(A.sum(axis=1))
+
+
+# Compute the Laplacian matrix
+L = D - A
+
+# Eigen decomposition of Laplacian
+eigenvalues, eigenvectors = np.linalg.eigh(L)
+
+# Diffusion coefficient (alpha)
+alpha = 0.1
+
+# Initial condition x(0)
+#np.random.seeds()
+x0 = np.random.rand(num_nodes)
+
+# Compute the theoretical stable value (mean of initial conditions)
+stable_value = np.mean(x0)
+
+# Time Steps for Simulation
+time_steps = np.linspace(0, 10, 100)
+
+
+# Time evolution function
+def diffusion_evolution(t, x0, alpha, L):
+    V = eigenvectors
+    Lambda = np.diag(eigenvalues)
+    
+    # Transform initial condition to eigenbasis #from dx to du
+    u0 = V.T @ x0
+    
+    # Time evolution in diagonalized basis
+    u_t = u0 * np.exp(-alpha * eigenvalues * t)
+    
+    # Transform back to original basis
+    x_t = V @ u_t
+    return x_t
+
+#Number of trials
+num_trials = 5000
+stabilization_times_all_trials = []
+
+# Simulate diffusion over time
+x_evolution = np.array([diffusion_evolution(t, x0, alpha, L) for t in time_steps])
+
+# Define the threshold for stability (1% error)
+error_threshold = 0.01 * stable_value  # 1% of the stable value
+
+# Find the time step where all nodes are within the error threshold
+stabilization_times = []
+for i in range(num_nodes):
+    for t_idx, t in enumerate(time_steps):
+        if abs(x_evolution[t_idx, i] - stable_value) < error_threshold:
+            stabilization_times.append(t)
+            break  # Stop at the first time step that meets the condition
+
+# Compute the average stabilization time
+average_stabilization_time = np.mean(stabilization_times)
+stabilization_times_all_trials.append(average_stabilization_time)
+
+
+# Compute the final average stabilization time over all trials
+final_avg_stabilization_time = np.mean(stabilization_times_all_trials)
+
+# Display the final averaged result
+print(final_avg_stabilization_time)
+
+
+# Plot the evolution of each node's state
+plt.figure(figsize=(8, 6))
+for i in range(A.shape[0]):
+    plt.plot(time_steps, x_evolution[:, i], label=f'Node {i+1}')
+plt.xlabel('Time')
+plt.ylabel('State')
+plt.title('Diffusion Process Over Time')
+plt.legend()
+plt.grid(True)
+plt.show()
