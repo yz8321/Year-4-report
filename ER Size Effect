@@ -1,0 +1,123 @@
+import numpy as np
+import networkx as nx
+import matplotlib.pyplot as plt
+
+# Parameters
+N = 200         # Number of nodes
+desired_avg_degree = 4
+p = desired_avg_degree / (N - 1)  # ER probability      
+u0 = 2.0       # Initial shock value
+T = 100        # Number of time steps
+dt = 0.1       # Time step size
+threshold = 0.02  # Stabilization threshold
+epsilon = 0.2     # Shocked state threshold
+num_trials = 100  # Number of trials
+
+# Flux function for Burgers' equation
+def godunov_flux(uL, uR):
+    if uL <= uR:
+        if uL >= 0:
+            return uL**2 / 2
+        elif uR <= 0:
+            return uR**2 / 2
+        else:
+            return 0.0 
+    else:
+        s = 0.5 * (uL + uR)
+        return uL**2 / 2 if s > 0 else uR**2 / 2
+
+# Storage for averaging
+all_shocked_fractions = []
+all_propagation_speeds = []
+
+# Run multiple trials
+for _ in range(num_trials):
+    # Generate ER graph
+    G = nx.erdos_renyi_graph(N, p)
+    A = nx.adjacency_matrix(G).toarray()
+    neighbors = [list(np.where(A[i])[0]) for i in range(N)]
+
+    # Initialize state
+    u = np.zeros((T, N))
+    shock_source = np.random.choice(N)
+    u[0, shock_source] = u0
+
+    for t in range(1, T):
+        u_prev = u[t - 1].copy()
+        du = np.zeros(N)
+        for i in range(N):
+            for j in neighbors[i]:
+                F_ij = godunov_flux(u_prev[i], u_prev[j])
+                F_ji = godunov_flux(u_prev[j], u_prev[i])
+                du[i] -= dt * (F_ij - F_ji)
+        u[t] = u_prev + du
+
+    # Shocked fraction
+    shocked_fraction = np.mean(u > epsilon, axis=1)
+    all_shocked_fractions.append(shocked_fraction)
+
+    # Propagation speed
+    shock_dist = np.zeros(T)
+    for t in range(T):
+        shocked_nodes = np.where(u[t] > epsilon)[0]
+        if len(shocked_nodes) > 0:
+            distances = [nx.shortest_path_length(G, source=shock_source, target=j) for j in shocked_nodes]
+            shock_dist[t] = np.mean(distances)
+    propagation_speed = shock_dist / (dt * np.arange(1, T + 1))
+    propagation_speed[0] = 0
+    all_propagation_speeds.append(propagation_speed)
+
+# Average results
+avg_shocked_fraction = np.mean(all_shocked_fractions, axis=0)
+# Define final value and tolerance
+final_value = avg_shocked_fraction[-1]
+tolerance = threshold * final_value
+
+d_shocked_fraction = np.gradient(avg_shocked_fraction, dt)
+# Find stabilization time
+stabilization_time = np.nan
+for t in range(T):
+    if np.all(np.abs(avg_shocked_fraction[t:] - final_value) <= tolerance):
+        stabilization_time = t * dt
+        break
+
+#Propagation speed
+avg_propagation_speed = np.mean(all_propagation_speeds, axis=0)
+mean_speed = np.mean(avg_propagation_speed[1:])  # exclude t=0
+
+# Transition sharpness (max slope)
+transition_sharpness = np.max(d_shocked_fraction)
+# Plot results
+fig, axs = plt.subplots(3, 1, figsize=(8, 10), sharex=True)
+#Stabilization Time
+axs[0].plot(np.arange(T) * dt, avg_shocked_fraction, label='Avg. Shocked Fraction', color='tab:blue')
+axs[0].set_ylabel('Shocked Fraction')
+axs[1].set_xlabel('Time')
+axs[0].legend()
+axs[0].grid(True)
+axs[0].set_title(f'Average of {num_trials} Trials on ER Network (N = 200)')
+axs[0].axvline(stabilization_time, color='gray', linestyle='--',
+               label=f'Stabilization ≈ {stabilization_time:.4f}')
+axs[0].legend()
+
+#Propogation speed
+axs[1].plot(np.arange(T) * dt, avg_propagation_speed, label='Avg. Propagation Speed', color='tab:green')
+axs[1].set_ylabel('Propagation Speed')
+axs[1].set_xlabel('Time')
+axs[1].axhline(mean_speed, color='gray', linestyle='--',
+               label=f'Mean Speed ≈ {mean_speed:.4f}')
+axs[1].legend()
+axs[1].grid(True)
+#Transition Sharpness
+axs[2].plot(np.arange(T) * dt, d_shocked_fraction, label='Transition Sharpness', color='tab:red')
+axs[2].set_ylabel('d/dt Shocked Fraction')
+axs[2].set_xlabel('Time')
+axs[2].axvline(transition_sharpness, color='gray', linestyle='--',
+               label=f'Sharpest Transition ≈ {transition_sharpness:.4f}')
+axs[2].legend()
+axs[2].grid(True)
+
+
+
+plt.tight_layout()
+plt.show()
