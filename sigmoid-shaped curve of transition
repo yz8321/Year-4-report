@@ -1,0 +1,22 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Simulated data: number of shocked nodes over time (sigmoid-like curve)
+time_steps = np.linspace(0, 10, 100)
+N = 100  # Total number of nodes
+# Sigmoid curve: fraction of shocked nodes
+shocked_fraction = 1 / (1 + np.exp(-2 * (time_steps - 5)))
+
+# Convert to actual number of shocked nodes
+shocked_nodes = shocked_fraction * N
+
+# Plot
+plt.figure(figsize=(8, 5))
+plt.plot(time_steps, shocked_nodes, label='Number of shocked nodes', linewidth=2)
+plt.xlabel('Time')
+plt.ylabel('Number of shocked nodes')
+plt.title('Example: Shocked Nodes Over Time')
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
