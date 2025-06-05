@@ -1,0 +1,57 @@
+import numpy as np
+import networkx as nx
+import matplotlib.pyplot as plt
+
+# Parameters
+N = 12
+m = 2
+T = 100
+dt = 0.1
+u0 = 1.0
+
+# Generate a small Barabási–Albert (BA) scale-free network
+G = nx.barabasi_albert_graph(N, m)
+A = nx.adjacency_matrix(G).toarray()
+neighbors = [list(np.where(A[i])[0]) for i in range(N)]
+
+# Flux function for Burgers' equation
+def godunov_flux(uL, uR):
+    if uL <= uR:
+        if uL >= 0:
+            return uL**2 / 2
+        elif uR <= 0:
+            return uR**2 / 2
+        else:
+            return 0.0 
+    else:
+        s = 0.5 * (uL + uR)
+        return uL**2 / 2 if s > 0 else uR**2 / 2
+
+# Initialize state
+u = np.zeros((T, N))
+shock_source = np.random.choice(N)
+u[0, shock_source] = u0
+
+# Evolve system using Burgers' equation
+for t in range(1, T):
+    u_prev = u[t - 1].copy()
+    du = np.zeros(N)
+    for i in range(N):
+        for j in neighbors[i]:
+            F_ij = godunov_flux(u_prev[i], u_prev[j])
+            F_ji = godunov_flux(u_prev[j], u_prev[i])
+            du[i] -= dt * (F_ij - F_ji)
+    u[t] = u_prev + du
+
+# Plot state evolution for each node
+plt.figure(figsize=(10, 6))
+for i in range(N):
+    plt.plot(np.arange(T) * dt, u[:, i], label=f'Node {i+1}')
+
+plt.title("Burgers' Equation Process Over Time (on Network)")
+plt.xlabel("Time")
+plt.ylabel("State")
+plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+plt.grid(True)
+plt.tight_layout()
+plt.show()
