@@ -1,0 +1,163 @@
+import numpy as np
+import networkx as nx
+import matplotlib.pyplot as plt
+
+# Parameters
+N = 60
+T = 200
+dt = 0.1
+u0 = 2.0
+epsilon = 0.2
+num_trials = 100
+
+time = np.arange(T) * dt
+
+# Godunov flux for Burgers' equation
+def godunov_flux(uL, uR):
+    if uL <= uR:
+        if uL >= 0:
+            return uL**2 / 2
+        elif uR <= 0:
+            return uR**2 / 2
+        else:
+            return 0.0
+    else:
+        s = 0.5 * (uL + uR)
+        return uL**2 / 2 if s > 0 else uR**2 / 2
+
+# Shock propagation simulation
+def simulate_shock(G, source_node):
+    u = np.zeros((T, N))
+    u[0, source_node] = u0
+    neighbors = [list(G.neighbors(i)) for i in range(N)]
+
+    for t in range(1, T):
+        u_prev = u[t - 1].copy()
+        du = np.zeros(N)
+        for i in range(N):
+            for j in neighbors[i]:
+                F_ij = godunov_flux(u_prev[i], u_prev[j])
+                F_ji = godunov_flux(u_prev[j], u_prev[i])
+                du[i] -= dt * (F_ij - F_ji)
+        u[t] = u_prev + du
+    return u
+
+# Stabilization time
+def compute_stabilization_time(fraction, threshold=0.01):
+    final_value = fraction[-1]
+    for t, value in enumerate(fraction):
+        if abs(value - final_value) < threshold * final_value:
+            return t * dt
+    return T * dt
+
+# Generate networks
+p_er = 0.09
+G_er = nx.erdos_renyi_graph(N, p_er, seed=42)
+
+num_communities = 4
+nodes_per_comm = N // num_communities
+p_in, p_out = 0.6, 0.01
+G_mod = nx.Graph()
+G_mod.add_nodes_from(range(N))
+for i in range(N):
+    for j in range(i + 1, N):
+        same_comm = (i // nodes_per_comm) == (j // nodes_per_comm)
+        if same_comm and np.random.rand() < p_in:
+            G_mod.add_edge(i, j)
+        elif not same_comm and np.random.rand() < p_out:
+            G_mod.add_edge(i, j)
+
+# Run simulations
+f_er_all, f_mod_all = [], []
+s_er_all, s_mod_all = [], []
+v_er_all, v_mod_all = [], []
+
+for _ in range(num_trials):
+    src = np.random.choice(N)
+    u_er = simulate_shock(G_er, src)
+    u_mod = simulate_shock(G_mod, src)
+
+    shocked_er = np.mean(u_er > epsilon, axis=1)
+    shocked_mod = np.mean(u_mod > epsilon, axis=1)
+
+    f_er_all.append(shocked_er)
+    f_mod_all.append(shocked_mod)
+    s_er_all.append(np.gradient(shocked_er, dt))
+    s_mod_all.append(np.gradient(shocked_mod, dt))
+
+    # Propagation speed
+    speed_er, speed_mod = [], []
+    for t in range(T):
+        se = np.where(u_er[t] > epsilon)[0]
+        sm = np.where(u_mod[t] > epsilon)[0]
+        if len(se) > 0:
+            try:
+                dists = [nx.shortest_path_length(G_er, src, j) for j in se]
+                speed_er.append(np.mean(dists) / (t * dt + 1e-6))
+            except nx.NetworkXNoPath:
+                speed_er.append(0)
+        else:
+            speed_er.append(0)
+
+        if len(sm) > 0:
+            try:
+                dists = [nx.shortest_path_length(G_mod, src, j) for j in sm]
+                speed_mod.append(np.mean(dists) / (t * dt + 1e-6))
+            except nx.NetworkXNoPath:
+                speed_mod.append(0)
+        else:
+            speed_mod.append(0)
+
+    v_er_all.append(speed_er)
+    v_mod_all.append(speed_mod)
+
+# Average metrics
+f_er = np.mean(f_er_all, axis=0)
+f_mod = np.mean(f_mod_all, axis=0)
+s_er = np.mean(s_er_all, axis=0)
+s_mod = np.mean(s_mod_all, axis=0)
+v_er = np.mean(v_er_all, axis=0)
+v_mod = np.mean(v_mod_all, axis=0)
+
+stab_time_er = compute_stabilization_time(f_er)
+stab_time_mod = compute_stabilization_time(f_mod)
+
+# --- PLOTS ---
+
+# 1. Transition Sharpness
+plt.figure(figsize=(10, 4))
+plt.plot(time, s_er, label='ER (Transition Sharpness)')
+plt.plot(time, s_mod, label='Modular (Transition Sharpness)')
+plt.xlabel("Time")
+plt.ylabel("d(Fraction Shocked)/dt")
+plt.title("Transition Sharpness Over Time (Godunov Simulation)")
+plt.legend()
+plt.grid()
+plt.tight_layout()
+plt.show()
+
+# 2. Propagation Speed
+plt.figure(figsize=(10, 4))
+plt.plot(time, v_er, label='ER (Propagation Speed)')
+plt.plot(time, v_mod, label='Modular (Propagation Speed)')
+plt.xlabel("Time")
+plt.ylabel("Avg Distance from Source / Time")
+plt.title("Propagation Speed Over Time (Godunov Simulation)")
+plt.legend()
+plt.grid()
+plt.tight_layout()
+plt.show()
+
+# 3. Stabilization Time Line Plot
+plt.figure(figsize=(10, 4))
+plt.plot(time, f_er / N, label='ER (Avg. Shocked Fraction)')
+plt.plot(time, f_mod / N, label='Modular (Avg. Shocked Fraction)')
+plt.axvline(x=stab_time_er, color='blue', linestyle='--', label=f'ER Stabilization ≈ {stab_time_er:.2f}s')
+plt.axvline(x=stab_time_mod, color='orange', linestyle='--', label=f'Modular Stabilization ≈ {stab_time_mod:.2f}s')
+plt.xlabel("Time")
+plt.ylabel("Shocked Fraction")
+plt.title("Stabilization Time Visualization (Godunov Simulation)")
+plt.legend()
+plt.grid()
+plt.tight_layout()
+plt.show()
