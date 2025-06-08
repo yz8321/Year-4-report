@@ -1,0 +1,136 @@
+import numpy as np
+import networkx as nx
+import matplotlib.pyplot as plt
+from networkx.algorithms.community import modularity
+from tqdm import tqdm
+
+# Parameters
+N = 100
+num_communities = 4
+nodes_per_comm = N // num_communities
+T = 300
+dt = 0.05
+u0 = 0.5
+epsilon = 0.2
+num_trials = 10
+p_in = 0.95
+p_out_values = np.linspace(0.0001, 0.2, 10)
+time = np.arange(T) * dt
+
+# Godunov flux
+def godunov_flux(uL, uR):
+    if uL <= uR:
+        if uL >= 0:
+            return uL**2 / 2
+        elif uR <= 0:
+            return uR**2 / 2
+        else:
+            return 0.0
+    else:
+        s = 0.5 * (uL + uR)
+        return uL**2 / 2 if s > 0 else uR**2 / 2
+
+# Simulation
+def simulate_shock(G, source_node):
+    u = np.zeros((T, N))
+    u[0, source_node] = u0
+    neighbors = [list(G.neighbors(i)) for i in range(N)]
+
+    for t in range(1, T):
+        u_prev = u[t - 1].copy()
+        du = np.zeros(N)
+        for i in range(N):
+            for j in neighbors[i]:
+                F_ij = godunov_flux(u_prev[i], u_prev[j])
+                F_ji = godunov_flux(u_prev[j], u_prev[i])
+                du[i] -= dt * (F_ij - F_ji)
+        u[t] = np.clip(u_prev + du, -10, 10)
+    return u
+
+# Convergence-based stabilization time
+def compute_stabilization_time_alt(u, tol=1e-3, window=5):
+    for t in range(T - window):
+        delta = np.max(np.abs(u[t + window] - u[t]))
+        if delta < tol:
+            return t * dt
+    return T * dt
+
+# Transition sharpness as max 5-step avg increase
+def compute_transition_sharpness(fraction, window=5):
+    diffs = [fraction[t + window] - fraction[t] for t in range(len(fraction) - window)]
+    return max(diffs) / (window * dt)
+
+# Early-time average propagation speed
+def compute_avg_speed(G, u, src, max_t_frac=0.2):
+    max_t = int(T * max_t_frac)
+    speed_over_time = []
+    for t in range(1, max_t):
+        active = np.where(u[t] > epsilon)[0]
+        if len(active) > 0:
+            try:
+                dists = [nx.shortest_path_length(G, src, j) for j in active]
+                speed_over_time.append(np.mean(dists) / (t * dt + 1e-6))
+            except nx.NetworkXNoPath:
+                speed_over_time.append(0)
+        else:
+            speed_over_time.append(0)
+    return np.mean(speed_over_time)
+
+# Generate modular network with known community labels
+def generate_modular_graph(N, num_communities, p_in, p_out):
+    G = nx.Graph()
+    G.add_nodes_from(range(N))
+    for i in range(N):
+        for j in range(i + 1, N):
+            same_comm = (i // nodes_per_comm) == (j // nodes_per_comm)
+            if same_comm and np.random.rand() < p_in:
+                G.add_edge(i, j)
+            elif not same_comm and np.random.rand() < p_out:
+                G.add_edge(i, j)
+    return G
+
+# Store results
+modularities, stab_times, sharpnesses, avg_speeds = [], [], [], []
+
+# Run simulation
+print("Running simulations...")
+for p_out in tqdm(p_out_values):
+    G = generate_modular_graph(N, num_communities, p_in, p_out)
+    ground_truth = [set(range(i * nodes_per_comm, (i + 1) * nodes_per_comm)) for i in range(num_communities)]
+    Q = modularity(G, ground_truth)
+    modularities.append(Q)
+
+    stab_list, sharp_list, speed_list = [], [], []
+
+    for _ in range(num_trials):
+        src = np.random.choice(N)
+        u = simulate_shock(G, src)
+        shocked_fraction = np.mean(u > epsilon, axis=1)
+
+        stab_list.append(compute_stabilization_time_alt(u))
+        sharp_list.append(compute_transition_sharpness(shocked_fraction))
+        speed_list.append(compute_avg_speed(G, u, src))
+
+    stab_times.append(np.mean(stab_list))
+    sharpnesses.append(np.mean(sharp_list))
+    avg_speeds.append(np.mean(speed_list))
+
+# Sort results for plotting
+sorted_idx = np.argsort(modularities)
+modularities = np.array(modularities)[sorted_idx]
+stab_times = np.array(stab_times)[sorted_idx]
+sharpnesses = np.array(sharpnesses)[sorted_idx]
+avg_speeds = np.array(avg_speeds)[sorted_idx]
+
+# Plot
+plt.figure(figsize=(10, 6))
+plt.plot(modularities, stab_times, '-o', label="Stabilization Time")
+plt.plot(modularities, sharpnesses, '-s', label="Transition Sharpness")
+plt.plot(modularities, avg_speeds, '-^', label="Avg. Propagation Speed")
+plt.xlabel("Modularity (Q)")
+plt.ylabel("Metric Value")
+plt.title("Shock Propagation Metrics vs. Network Modularity (Improved)")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
