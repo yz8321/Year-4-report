@@ -1,0 +1,73 @@
+# Redefine metric computation functions
+def calculate_metrics(G, u, shock_source, dt, epsilon, threshold):
+    shocked_fraction = np.mean(u > epsilon, axis=1)
+    final_val = shocked_fraction[-1]
+    stab_time = next((t * dt for t in range(T) 
+                      if np.all(np.abs(shocked_fraction[t:] - final_val) <= threshold * final_val)), np.nan)
+    
+    dists = []
+    for t in range(1, T):
+        shocked = np.where(u[t] > epsilon)[0]
+        if len(shocked) > 0:
+            try:
+                d = np.mean([nx.shortest_path_length(G, shock_source, n)
+                             for n in shocked if nx.has_path(G, shock_source, n)])
+                dists.append((t * dt, d))
+            except:
+                continue
+    if len(dists) > 1:
+        times, distances = zip(*dists)
+        speed = np.polyfit(times, distances, 1)[0]
+    else:
+        speed = np.nan
+
+    d_shocked = np.gradient(shocked_fraction, dt)
+    sharpness = np.max(np.abs(d_shocked))
+    return stab_time, speed, sharpness
+
+# Initialize result containers
+stab_means = []
+speed_means = []
+sharpness_means = []
+
+for r in assortativity_values:
+    stabs, speeds, sharpnesses = [], [], []
+    for _ in range(num_trials):
+        G = generate_assortative_graph(N, p, r)
+        A = nx.adjacency_matrix(G).toarray()
+        neighbors = [np.where(A[i])[0] for i in range(N)]
+
+        u = np.zeros((T, N))
+        shock_source = np.random.choice(N)
+        u[0, shock_source] = u0
+
+        for t in range(1, T):
+            u_prev = u[t - 1]
+            du = np.zeros(N)
+            for i in range(N):
+                for j in neighbors[i]:
+                    flux = godunov_flux(u_prev[i], u_prev[j]) - godunov_flux(u_prev[j], u_prev[i])
+                    du[i] -= dt * flux
+            u[t] = np.clip(u_prev + du, -1e3, 1e3)  # prevent overflow
+
+        stab, speed, sharp = calculate_metrics(G, u, shock_source, dt, epsilon, threshold)
+        stabs.append(stab)
+        speeds.append(speed)
+        sharpnesses.append(sharp)
+
+    stab_means.append(np.nanmean(stabs))
+    speed_means.append(np.nanmean(speeds))
+    sharpness_means.append(np.nanmean(sharpnesses))
+
+# Plotting all three metrics
+plt.figure(figsize=(10, 6))
+plt.plot(assortativity_values, stab_means, 'o-', label="Stabilization Time", color='crimson')
+plt.plot(assortativity_values, speed_means, 's--', label="Propagation Speed", color='darkblue')
+plt.plot(assortativity_values, sharpness_means, 'd-.', label="Transition Sharpness", color='darkgreen')
+plt.xlabel("Assortativity Coefficient $r$")
+plt.ylabel("Metric Value")
+plt.title("Shock Propagation Metrics vs Assortativity")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
