@@ -1,0 +1,144 @@
+import numpy as np
+import networkx as nx
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+
+# Parameters
+N = 100               # Number of nodes
+p = 0.20              # ER edge probability
+u0 = 2.0              # Initial shock value
+T = 100               # Number of time steps
+dt = 0.1              # Time step size
+threshold = 0.02      # Stabilization threshold
+epsilon = 0.2         # Shocked state threshold
+num_trials = 100      # Number of trials per graph
+num_graphs = 3        # Number of graphs per assortativity
+assortativities = {'Neutral': 0.0, 'Assortative': 0.8}  # Removed 'Disassortative'
+
+# Godunov flux function
+def godunov_flux(uL, uR):
+    if uL <= uR:
+        return max(uL**2/2, 0) if uL >= 0 else min(uR**2/2, 0)
+    else:
+        return uL**2/2 if 0.5*(uL + uR) > 0 else uR**2/2
+
+# Graph generation with target assortativity
+def generate_assortative_graph(N, p, target_r, max_attempts=10000):
+    G = nx.erdos_renyi_graph(N, p)
+    if target_r == 0:
+        return G
+    
+    current_r = nx.degree_pearson_correlation_coefficient(G)
+    best_G = G.copy()
+    best_diff = abs(current_r - target_r)
+    
+    for _ in range(max_attempts):
+        edges = list(G.edges())
+        if len(edges) < 2:
+            break
+        idx1, idx2 = np.random.choice(len(edges), 2, replace=False)
+        a, b = edges[idx1]
+        c, d = edges[idx2]
+        if len({a, b, c, d}) < 4:
+            continue
+        deg = dict(G.degree())
+        before = deg[a]*deg[b] + deg[c]*deg[d]
+        after = deg[a]*deg[d] + deg[c]*deg[b]
+        if (after - before) * (target_r - current_r) > 0:
+            if not G.has_edge(a, d) and not G.has_edge(c, b):
+                G.remove_edge(a, b)
+                G.remove_edge(c, d)
+                G.add_edge(a, d)
+                G.add_edge(c, b)
+                try:
+                    new_r = nx.degree_pearson_correlation_coefficient(G)
+                    if abs(new_r - target_r) < best_diff:
+                        best_diff = abs(new_r - target_r)
+                        best_G = G.copy()
+                        if best_diff < 0.02:
+                            return best_G
+                    current_r = new_r
+                except:
+                    continue
+    return best_G
+
+# Metric computation
+def calculate_metrics(G, u, shock_source, dt, epsilon, threshold):
+    shocked_fraction = np.mean(u > epsilon, axis=1)
+    final_val = shocked_fraction[-1]
+    stab_time = next((t*dt for t in range(T) 
+                      if np.all(np.abs(shocked_fraction[t:] - final_val) <= threshold * final_val)), np.nan)
+    
+    dists = []
+    for t in range(1, T):
+        shocked = np.where(u[t] > epsilon)[0]
+        if len(shocked) > 0:
+            try:
+                d = np.mean([nx.shortest_path_length(G, shock_source, n)
+                             for n in shocked if nx.has_path(G, shock_source, n)])
+                dists.append((t*dt, d))
+            except:
+                continue
+    if len(dists) > 1:
+        times, distances = zip(*dists)
+        speed = np.polyfit(times, distances, 1)[0]
+    else:
+        speed = np.nan
+    
+    d_shocked = np.gradient(shocked_fraction, dt)
+    sharpness = np.max(np.abs(d_shocked))
+    return stab_time, speed, sharpness
+
+# Main simulation
+results = {metric: {atype: [] for atype in assortativities}
+           for metric in ['Stabilization Time', 'Propagation Speed', 'Transition Sharpness']}
+
+for atype, target_r in tqdm(assortativities.items(), desc='Assortativity Types'):
+    for _ in tqdm(range(num_graphs), desc=f'Graphs ({atype})', leave=False):
+        G = generate_assortative_graph(N, p, target_r)
+        actual_r = nx.degree_pearson_correlation_coefficient(G)
+        print(f"{atype}: Target {target_r:.2f}, Achieved {actual_r:.3f}")
+        A = nx.adjacency_matrix(G).toarray()
+        neighbors = [list(np.where(A[i])[0]) for i in range(N)]
+        
+        for _ in range(num_trials):
+            u = np.zeros((T, N))
+            shock_source = np.random.choice(N)
+            u[0, shock_source] = u0
+            for t in range(1, T):
+                u_prev = u[t-1]
+                du = np.zeros(N)
+                for i in range(N):
+                    for j in neighbors[i]:
+                        flux = godunov_flux(u_prev[i], u_prev[j]) - godunov_flux(u_prev[j], u_prev[i])
+                        du[i] -= dt * flux
+                u[t] = u_prev + du
+            
+            metrics = calculate_metrics(G, u, shock_source, dt, epsilon, threshold)
+            for metric, value in zip(results.keys(), metrics):
+                results[metric][atype].append(value)
+
+# Plotting
+plt.figure(figsize=(10, 6))
+x = np.arange(len(assortativities))
+width = 0.25
+
+
+for i, (metric, values) in enumerate(results.items()):
+    means = [np.nanmean(values[atype]) for atype in assortativities]
+    std_errs = [np.nanstd(values[atype]) / np.sqrt(len(values[atype])) for atype in assortativities]
+    
+    bars = plt.bar(x + (i-1)*width, means, width, label=metric,
+                   yerr=std_errs, capsize=5)
+    
+    for bar, mean in zip(bars, means):
+        plt.text(bar.get_x() + bar.get_width()/2, bar.get_height()*1.02,
+                 f'{mean:.2f}', ha='center', va='bottom')
+
+plt.xticks(x, assortativities.keys())
+plt.ylabel('Metric Value')
+plt.title('Shock Propagation Metrics: Neutral vs Assortative Networks')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
